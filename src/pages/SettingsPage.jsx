@@ -119,7 +119,7 @@ export default function SettingsPage() {
           </span>
         </div>
         {[
-          ['API Base URL', import.meta.env.VITE_API_BASE_URL || 'https://anuritrag.onrender.com'],
+          ['API Base URL', import.meta.env.VITE_API_BASE_URL || 'https://ragapi-frd0aeaeajh7gthx.southindia-01.azurewebsites.net'],
           ['Storage Container', 'vectordbforrag'],
           ['Embedding Model', 'sentence-transformers/all-MiniLM-L12-v2'],
           ['Supported Formats', 'PDF, DOCX, PPTX, TXT, XLSX, CSV, JSON, HTML, MD'],

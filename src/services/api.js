@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getApiKey } from '../store/settingsStore'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://ragapi-frd0aeaeajh7gthx.southindia-01.azurewebsites.net'
 
@@ -9,23 +10,12 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  const apiKey = getStoredApiKey()
+  const apiKey = getApiKey()
   if (apiKey) {
     config.headers['Authorization'] = `Bearer ${apiKey}`
   }
   return config
 })
-
-function getStoredApiKey() {
-  try {
-    const raw = localStorage.getItem('rag-admin-settings')
-    if (!raw) return ''
-    const parsed = JSON.parse(raw)
-    return parsed?.state?.apiKey || ''
-  } catch {
-    return ''
-  }
-}
 
 // ── Health ──────────────────────────────────────────────────────────────────
 export const checkHealth = () => api.get('/health')
@@ -41,28 +31,20 @@ export const getChunks = (docId) => api.get(`/chunks/${docId}`)
 
 // ── Ingestion ────────────────────────────────────────────────────────────────
 
-// Starts the background job — returns { request_id, status: "pending", poll_url }
-export const ingestGoogleDriveStart = (folderId, label, extraMetadata = {}) =>
-  api.post('/ingest/google-drive', {
+export const ingestGoogleDriveStart = (folderId, label, extraMetadata = {}) => {
+  const { client_id, ...restMeta } = extraMetadata
+  return api.post('/ingest/google-drive', {
+    client_id: client_id || '',
     folder_id: folderId,
     label,
     recursive: true,
-    extra_metadata: extraMetadata,
+    extra_metadata: restMeta,
   })
+}
 
-// Poll job status — returns { request_id, status, result? }
 export const ingestGoogleDriveStatus = (requestId) =>
   api.get(`/ingest/google-drive/status/${requestId}`)
 
-/**
- * Start a Google Drive ingestion and poll until done.
- *
- * @param {string} folderId  - Raw folder ID (not the full URL)
- * @param {string} label     - Human-readable label
- * @param {Function} onProgress - Called with status string on each poll: "pending"|"running"|"done"|"error"
- * @param {number} intervalMs  - How often to poll in ms (default 4000)
- * @returns {Promise<object>} - Resolves with the final result or rejects with error detail
- */
 export const ingestGoogleDrive = (folderId, label, onProgress = null, extraMetadata = {}, intervalMs = 4000) => {
   return new Promise(async (resolve, reject) => {
     try {
@@ -85,7 +67,6 @@ export const ingestGoogleDrive = (folderId, label, onProgress = null, extraMetad
             clearInterval(poll)
             reject(new Error(job.detail || 'Ingestion failed'))
           }
-          // pending / running → keep polling
         } catch (pollErr) {
           clearInterval(poll)
           reject(pollErr)
@@ -98,20 +79,26 @@ export const ingestGoogleDrive = (folderId, label, onProgress = null, extraMetad
   })
 }
 
-export const ingestSharePoint = (siteUrl, folderPath, label, extraMetadata = {}) =>
-  api.post('/ingest/sharepoint', {
+export const ingestSharePoint = (siteUrl, folderPath, label, extraMetadata = {}) => {
+  const { client_id, ...restMeta } = extraMetadata
+  return api.post('/ingest/sharepoint', {
+    client_id: client_id || '',
     site_url: siteUrl,
     folder_path: folderPath,
     label,
-    extra_metadata: extraMetadata,
+    extra_metadata: restMeta,
   })
+}
 
-export const ingestLocalDirectory = (directoryPath, label, extraMetadata = {}) =>
-  api.post('/ingest/local-directory', {
+export const ingestLocalDirectory = (directoryPath, label, extraMetadata = {}) => {
+  const { client_id, ...restMeta } = extraMetadata
+  return api.post('/ingest/local-directory', {
+    client_id: client_id || '',
     directory_path: directoryPath,
     label,
-    extra_metadata: extraMetadata,
+    extra_metadata: restMeta,
   })
+}
 
 export const scanDirectory = (directoryPath) =>
   api.post('/scan-directory', { directory_path: directoryPath })

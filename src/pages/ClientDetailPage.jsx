@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useClientStore } from '../store/clientStore'
-import { useSettingsStore } from '../store/settingsStore'
+import { getApiKey } from '../store/settingsStore'
 import {
   ingestGoogleDrive, ingestSharePoint, ingestLocalDirectory,
   extractDriveFolderId, detectSourceType
@@ -52,7 +52,7 @@ function RunLog({ run }) {
       )}
       {run.error && (
         <div style={{ fontSize: 11, color: '#f43f5e', marginTop: 6, fontFamily: "'Space Mono', monospace", wordBreak: 'break-word' }}>
-          {run.error}
+          {typeof run.error === 'string' ? run.error : JSON.stringify(run.error)}
         </div>
       )}
     </div>
@@ -98,11 +98,26 @@ function SourceTypePicker({ value, onChange }) {
   )
 }
 
+function parseErrorMsg(err) {
+  try {
+    const detail = err?.response?.data?.detail
+    if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) {
+      // FastAPI 422 validation error — array of {type, loc, msg, input}
+      return detail.map(e => e?.msg || JSON.stringify(e)).join(', ')
+    }
+    if (detail && typeof detail === 'object') {
+      return detail.msg || JSON.stringify(detail)
+    }
+    if (err?.message) return err.message
+  } catch (_) { /* ignore */ }
+  return 'Ingestion failed'
+}
+
 export default function ClientDetailPage() {
   const { clientId } = useParams()
   const navigate = useNavigate()
   const { getClient, setFolderLink, setClientStatus, updateClient, removeClient } = useClientStore()
-  const { apiKey } = useSettingsStore()
 
   const client = getClient(clientId)
   const [folderInput, setFolderInput] = useState(client?.folderLink || '')
@@ -123,13 +138,11 @@ export default function ClientDetailPage() {
     if (client?.sourceType) setManualSourceType(client.sourceType)
   }, [client?.folderLink, client?.sourceType])
 
-  // Auto-detect source type as user types
   useEffect(() => {
     const detected = detectSourceType(folderInput)
     setManualSourceType(detected)
   }, [folderInput])
 
-  // Auto-sync watcher
   useEffect(() => {
     if (watcherRef.current) clearInterval(watcherRef.current)
     if (client?.autoSync && client?.folderLink) {
@@ -156,19 +169,15 @@ export default function ClientDetailPage() {
 
   async function runIngestion(silent = false) {
     if (!client.folderLink) return toast.error('Set a folder link first')
-    if (!apiKey) return toast.error('Add your API key in Settings first')
+    if (!getApiKey()) return toast.error('Add your API key in Settings first')
     if (running) return
 
     const sourceType = client.sourceType || manualSourceType
 
-    // Block Windows paths early — they cannot exist on Render Linux server
     if (sourceType === 'local' && isWindowsPath(client.folderLink)) {
       const errMsg = `Windows path "${client.folderLink}" cannot exist on the Render server (Linux). ` +
         'Upload your files to Google Drive and use a Google Drive folder URL instead.'
-      setClientStatus(clientId, 'error', {
-        lastRunAt: new Date().toISOString(),
-        lastError: errMsg,
-      })
+      setClientStatus(clientId, 'error', { lastRunAt: new Date().toISOString(), lastError: errMsg })
       saveRunLog({ timestamp: new Date().toISOString(), success: false, error: errMsg })
       toast.error('Windows paths do not work — use Google Drive instead', { duration: 5000 })
       return
@@ -200,7 +209,6 @@ export default function ClientDetailPage() {
           },
           { client_id: client.clientId },
         )
-        // ingestGoogleDrive resolves with the result object directly (not res.data)
         const summary = res
         const docsCount = summary?.documents_processed || summary?.files_found || 0
         setClientStatus(clientId, 'success', {
@@ -213,6 +221,7 @@ export default function ClientDetailPage() {
         else toast.success(`Auto-sync: ${docsCount} docs for ${client.name}`)
         setRunning(false)
         return
+
       } else if (sourceType === 'sharepoint') {
         const url = new URL(client.folderLink)
         const parts = url.pathname.split('/')
@@ -227,22 +236,22 @@ export default function ClientDetailPage() {
 
       const summary = res.data?.summary
       const docsCount = summary?.documents_processed || res.data?.files_found || 0
-
       setClientStatus(clientId, 'success', {
         lastRunAt: new Date().toISOString(),
         documentsCount: docsCount,
         lastError: null,
       })
       saveRunLog({ timestamp: new Date().toISOString(), success: true, summary, elapsed: Date.now() - startTime })
-
       if (!silent) toast.success(`Ingestion complete — ${docsCount} docs processed`, { id: 'ingest' })
       else toast.success(`Auto-sync: ${docsCount} docs for ${client.name}`)
 
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || 'Ingestion failed'
-      setClientStatus(clientId, 'error', { lastRunAt: new Date().toISOString(), lastError: msg })
-      saveRunLog({ timestamp: new Date().toISOString(), success: false, error: msg, elapsed: Date.now() - startTime })
-      if (!silent) toast.error(msg, { id: 'ingest' })
+      const msg = parseErrorMsg(err)
+      try {
+        setClientStatus(clientId, 'error', { lastRunAt: new Date().toISOString(), lastError: msg })
+        saveRunLog({ timestamp: new Date().toISOString(), success: false, error: msg, elapsed: Date.now() - startTime })
+      } catch (_) { /* store update failed */ }
+      if (!silent) toast.error(msg, { id: 'ingest', duration: 6000 })
     } finally {
       setRunning(false)
     }
@@ -307,7 +316,7 @@ export default function ClientDetailPage() {
         </div>
       </div>
 
-      {/* ── Windows path warning banner ── */}
+      {/* Windows path warning banner */}
       {savedLinkIsWindowsPath && (
         <div style={{
           display: 'flex', gap: 12, padding: '14px 16px', borderRadius: 10, marginBottom: 20,
@@ -381,7 +390,6 @@ export default function ClientDetailPage() {
                   />
                 </div>
 
-                {/* Contextual warnings */}
                 {manualSourceType === 'local' && (
                   <div style={{
                     display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 8,
