@@ -10,7 +10,8 @@ import toast from 'react-hot-toast'
 import {
   ArrowLeft, Link, Play, RefreshCw, Save, Trash2,
   Clock, CheckCircle, AlertCircle, ToggleLeft,
-  ToggleRight, FileText, Zap, Edit2, X, Info, HardDrive, Globe
+  ToggleRight, FileText, Zap, Edit2, X, Info, HardDrive, Globe,
+  Key, Copy, ShieldAlert
 } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 
@@ -117,13 +118,15 @@ function parseErrorMsg(err) {
 export default function ClientDetailPage() {
   const { clientId } = useParams()
   const navigate = useNavigate()
-  const { getClient, setFolderLink, setClientStatus, updateClient, removeClient } = useClientStore()
+  const { getClient, setFolderLink, setClientStatus, updateClient, removeClient, regenerateApiKey } = useClientStore()
 
   const client = getClient(clientId)
   const [folderInput, setFolderInput] = useState(client?.folderLink || '')
   const [manualSourceType, setManualSourceType] = useState(client?.sourceType || 'google-drive')
   const [editingFolder, setEditingFolder] = useState(!client?.folderLink)
   const [running, setRunning] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
+  const [newKeyPreview, setNewKeyPreview] = useState(null)   // shown after regen
   const [runLogs, setRunLogs] = useState(() => {
     try { return JSON.parse(localStorage.getItem(`run-logs-${clientId}`) || '[]') } catch { return [] }
   })
@@ -260,6 +263,41 @@ export default function ClientDetailPage() {
   function toggleAutoSync() {
     updateClient(clientId, { autoSync: !client.autoSync })
     toast.success(client.autoSync ? 'Auto-sync disabled' : 'Auto-sync enabled')
+  }
+
+  function generateApiKey() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*'
+    const arr = new Uint8Array(24)
+    crypto.getRandomValues(arr)
+    return 'rak_' + Array.from(arr).map((b) => chars[b % chars.length]).join('')
+  }
+
+  async function handleRegenerateKey() {
+    if (!confirm(
+      `Regenerate API key for "${client.name}"?\n\n` +
+      `The existing key will be IMMEDIATELY EXPIRED — any chat sessions using it will stop working. ` +
+      `You'll need to share the new key with the client.`
+    )) return
+    setRegenerating(true)
+    try {
+      const newKey = generateApiKey()
+      await regenerateApiKey(client.clientId, newKey)
+      setNewKeyPreview(newKey)
+      toast.success('API key regenerated — old key is now invalid')
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to regenerate key')
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
+  async function copyKey(key) {
+    try {
+      await navigator.clipboard.writeText(key)
+      toast.success('API key copied')
+    } catch {
+      toast.error('Failed to copy')
+    }
   }
 
   function handleDelete() {
@@ -487,6 +525,84 @@ export default function ClientDetailPage() {
                   <option value={1800000}>Every 30 minutes</option>
                   <option value={3600000}>Every 1 hour</option>
                 </select>
+              </div>
+            )}
+          </div>
+
+          {/* API Key Management */}
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Key size={15} color="#6c63ff" />
+                <span style={{ fontFamily: "'Syne', sans-serif", fontWeight: 700, fontSize: 14, color: '#e8e8f0' }}>
+                  API Key
+                </span>
+              </div>
+              <button
+                className="btn btn-sm"
+                style={{
+                  background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.25)',
+                  color: '#f43f5e', display: 'flex', alignItems: 'center', gap: 6,
+                  fontSize: 12, padding: '5px 12px', borderRadius: 7, cursor: 'pointer',
+                  opacity: regenerating ? 0.6 : 1,
+                }}
+                onClick={handleRegenerateKey}
+                disabled={regenerating}
+                title="Generate a new API key — the current key will be immediately expired"
+              >
+                {regenerating
+                  ? <><span className="spinner" style={{ width: 11, height: 11 }} />Regenerating...</>
+                  : <><RefreshCw size={12} />Regenerate Key</>
+                }
+              </button>
+            </div>
+
+            {newKeyPreview ? (
+              <div>
+                <div style={{
+                  display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 8, marginBottom: 10,
+                  background: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.25)',
+                }}>
+                  <ShieldAlert size={14} color="#f59e0b" style={{ flexShrink: 0, marginTop: 1 }} />
+                  <div style={{ fontSize: 12, color: '#9a7030', lineHeight: 1.65 }}>
+                    <strong style={{ color: '#f59e0b' }}>New key generated.</strong> The previous key is now expired.
+                    Share this new key with the client immediately.
+                  </div>
+                </div>
+                <div style={{
+                  padding: '10px 12px', background: '#12121a',
+                  border: '1px solid rgba(34,211,160,0.3)', borderRadius: 8,
+                  fontFamily: "'Space Mono', monospace", fontSize: 11,
+                  color: '#22d3a0', wordBreak: 'break-all', lineHeight: 1.6,
+                  marginBottom: 10,
+                }}>
+                  {newKeyPreview}
+                </div>
+                <button
+                  className="btn btn-sm btn-primary"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+                  onClick={() => copyKey(newKeyPreview)}
+                >
+                  <Copy size={12} /> Copy New Key
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div style={{
+                  padding: '10px 12px', background: '#12121a',
+                  border: '1px solid #2a2a3d', borderRadius: 8,
+                  fontFamily: "'Space Mono', monospace", fontSize: 12,
+                  color: '#555570',
+                }}>
+                  {client.apiKey
+                    ? `${client.apiKey.slice(0, 12)}${'•'.repeat(16)}`
+                    : <span style={{ color: '#333348' }}>No API key on record</span>
+                  }
+                </div>
+                <p style={{ fontSize: 11, color: '#555570', marginTop: 6 }}>
+                  Click <strong style={{ color: '#e8e8f0' }}>Regenerate Key</strong> to invalidate the current key and issue a new one.
+                  The client must update their key immediately after regeneration.
+                </p>
               </div>
             )}
           </div>
