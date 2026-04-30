@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   mongoCreateClient,
   mongoGetAllClients,
+  mongoGetClientWithKey,
   mongoPatchClient,
   mongoDeleteClient,
 } from '../services/mongoApi'
@@ -10,6 +11,7 @@ export const useClientStore = create((set, get) => ({
   clients: [],
   loading: false,
   error: null,
+
   fetchClients: async () => {
     set({ loading: true, error: null })
     try {
@@ -20,18 +22,41 @@ export const useClientStore = create((set, get) => ({
       throw err
     }
   },
+
   addClient: async ({ name, clientId, apiKey }) => {
     const res = await mongoCreateClient({ name, clientId, apiKey })
-    const client = res.data
+    // Backend returns full doc including apiKey on creation
+    const client = { ...res.data, apiKey }
     set((state) => ({ clients: [client, ...state.clients] }))
     return client
   },
+
+  // Fetch a single client's full record including apiKey (for detail page)
+  fetchClientWithKey: async (clientId) => {
+    try {
+      const res = await mongoGetClientWithKey(clientId)
+      const updated = res.data
+      set((state) => ({
+        clients: state.clients.map((c) =>
+          c.clientId === clientId ? { ...c, ...updated } : c
+        ),
+      }))
+      return updated
+    } catch (err) {
+      console.warn('[fetchClientWithKey] failed:', err.message)
+      return null
+    }
+  },
+
   regenerateApiKey: async (clientId, newApiKey) => {
-    const res = await mongoPatchClient(clientId, { apiKey: newApiKey, apiKeyRotatedAt: new Date().toISOString() })
-    const updated = res.data
+    // PATCH sends new key to backend, which evicts old key from cache
+    await mongoPatchClient(clientId, { apiKey: newApiKey, apiKeyRotatedAt: new Date().toISOString() })
+    // Update local store — backend response omits apiKey, so we set it manually
     set((state) => ({
       clients: state.clients.map((c) =>
-        c.clientId === clientId ? { ...c, ...updated, apiKey: newApiKey } : c
+        c.clientId === clientId
+          ? { ...c, apiKey: newApiKey, apiKeyRotatedAt: new Date().toISOString() }
+          : c
       ),
     }))
     return newApiKey
@@ -72,6 +97,7 @@ export const useClientStore = create((set, get) => ({
     }))
     await mongoPatchClient(clientId, { folderLink: link, sourceType: sourceType || 'google-drive' })
   },
+
   setClientStatus: async (clientId, status, extra = {}) => {
     set((state) => ({
       clients: state.clients.map((c) =>
