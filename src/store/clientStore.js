@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import {
   mongoCreateClient,
   mongoGetAllClients,
-  mongoGetClientWithKey,
+  mongoGetClient,    
   mongoPatchClient,
   mongoDeleteClient,
 } from '../services/mongoApi'
@@ -34,7 +34,7 @@ export const useClientStore = create((set, get) => ({
   // Fetch a single client's full record including apiKey (for detail page)
   fetchClientWithKey: async (clientId) => {
     try {
-      const res = await mongoGetClientWithKey(clientId)
+      const res = await mongoGetClient(clientId)     // ← Fixed here
       const updated = res.data
       set((state) => ({
         clients: state.clients.map((c) =>
@@ -49,9 +49,11 @@ export const useClientStore = create((set, get) => ({
   },
 
   regenerateApiKey: async (clientId, newApiKey) => {
-    // PATCH sends new key to backend, which evicts old key from cache
-    await mongoPatchClient(clientId, { apiKey: newApiKey, apiKeyRotatedAt: new Date().toISOString() })
-    // Update local store — backend response omits apiKey, so we set it manually
+    await mongoPatchClient(clientId, { 
+      apiKey: newApiKey, 
+      apiKeyRotatedAt: new Date().toISOString() 
+    })
+    
     set((state) => ({
       clients: state.clients.map((c) =>
         c.clientId === clientId
@@ -62,7 +64,6 @@ export const useClientStore = create((set, get) => ({
     return newApiKey
   },
 
-  // ── Patch any fields in MongoDB then update local cache ──────────────────
   updateClient: async (clientId, updates) => {
     const res = await mongoPatchClient(clientId, updates)
     const updated = res.data
@@ -74,7 +75,6 @@ export const useClientStore = create((set, get) => ({
     return updated
   },
 
-  // ── Delete from MongoDB then remove from local cache ─────────────────────
   removeClient: async (clientId) => {
     await mongoDeleteClient(clientId)
     set((state) => ({
@@ -82,11 +82,9 @@ export const useClientStore = create((set, get) => ({
     }))
   },
 
-  // ── Lookup helpers ───────────────────────────────────────────────────────
   getClient: (clientId) =>
     get().clients.find((c) => c.clientId === clientId),
 
-  // ── Folder link ──────────────────────────────────────────────────────────
   setFolderLink: async (clientId, link, sourceType) => {
     set((state) => ({
       clients: state.clients.map((c) =>
@@ -95,7 +93,10 @@ export const useClientStore = create((set, get) => ({
           : c
       ),
     }))
-    await mongoPatchClient(clientId, { folderLink: link, sourceType: sourceType || 'google-drive' })
+    await mongoPatchClient(clientId, { 
+      folderLink: link, 
+      sourceType: sourceType || 'google-drive' 
+    })
   },
 
   setClientStatus: async (clientId, status, extra = {}) => {
