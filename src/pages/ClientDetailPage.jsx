@@ -11,7 +11,7 @@ import {
   ArrowLeft, Link, Play, RefreshCw, Save, Trash2,
   Clock, CheckCircle, AlertCircle, ToggleLeft,
   ToggleRight, FileText, Zap, Edit2, X, Info, HardDrive, Globe,
-  Key, Copy, ShieldAlert
+  Key, Copy, ShieldAlert, Eye, EyeOff
 } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 
@@ -104,7 +104,6 @@ function parseErrorMsg(err) {
     const detail = err?.response?.data?.detail
     if (typeof detail === 'string') return detail
     if (Array.isArray(detail)) {
-      // FastAPI 422 validation error — array of {type, loc, msg, input}
       return detail.map(e => e?.msg || JSON.stringify(e)).join(', ')
     }
     if (detail && typeof detail === 'object') {
@@ -118,23 +117,50 @@ function parseErrorMsg(err) {
 export default function ClientDetailPage() {
   const { clientId } = useParams()
   const navigate = useNavigate()
-  const { getClient, setFolderLink, setClientStatus, updateClient, removeClient, regenerateApiKey } = useClientStore()
+  const {
+    clients, fetchClients, fetchClientWithKey,
+    getClient, setFolderLink, setClientStatus,
+    updateClient, removeClient, regenerateApiKey,
+  } = useClientStore()
+
+  // ── FIX: Don't redirect immediately — wait for clients to load first ──────
+  const [initialised, setInitialised] = useState(clients.length > 0)
+  const [showFullKey, setShowFullKey] = useState(false)
+
+  useEffect(() => {
+    if (clients.length === 0) {
+      fetchClients()
+        .then(() => setInitialised(true))
+        .catch(() => setInitialised(true))
+    }
+  }, [])
 
   const client = getClient(clientId)
+
+  // ── FIX: Load full client record (including apiKey) on mount ──────────────
+  useEffect(() => {
+    if (client && client.apiKey === undefined) {
+      fetchClientWithKey(clientId)
+    }
+  }, [client?.clientId])
+
   const [folderInput, setFolderInput] = useState(client?.folderLink || '')
   const [manualSourceType, setManualSourceType] = useState(client?.sourceType || 'google-drive')
   const [editingFolder, setEditingFolder] = useState(!client?.folderLink)
   const [running, setRunning] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
-  const [newKeyPreview, setNewKeyPreview] = useState(null)   // shown after regen
+  const [newKeyPreview, setNewKeyPreview] = useState(null)
   const [runLogs, setRunLogs] = useState(() => {
     try { return JSON.parse(localStorage.getItem(`run-logs-${clientId}`) || '[]') } catch { return [] }
   })
   const watcherRef = useRef(null)
 
+  // ── FIX: Only redirect after we've tried to load clients ─────────────────
   useEffect(() => {
-    if (!client) navigate('/clients', { replace: true })
-  }, [client])
+    if (initialised && !getClient(clientId)) {
+      navigate('/clients', { replace: true })
+    }
+  }, [initialised, clientId])
 
   useEffect(() => {
     if (client?.folderLink) setFolderInput(client.folderLink)
@@ -155,6 +181,13 @@ export default function ClientDetailPage() {
     return () => { if (watcherRef.current) clearInterval(watcherRef.current) }
   }, [client?.autoSync, client?.folderLink, client?.watchIntervalMs])
 
+  if (!initialised) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: '#555570', fontSize: 13 }}>
+        Loading…
+      </div>
+    )
+  }
   if (!client) return null
 
   function saveRunLog(log) {
@@ -265,9 +298,9 @@ export default function ClientDetailPage() {
     toast.success(client.autoSync ? 'Auto-sync disabled' : 'Auto-sync enabled')
   }
 
-  function generateApiKey() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*'
-    const arr = new Uint8Array(24)
+  function generateNewApiKey() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+    const arr = new Uint8Array(28)
     crypto.getRandomValues(arr)
     return 'rak_' + Array.from(arr).map((b) => chars[b % chars.length]).join('')
   }
@@ -280,9 +313,10 @@ export default function ClientDetailPage() {
     )) return
     setRegenerating(true)
     try {
-      const newKey = generateApiKey()
+      const newKey = generateNewApiKey()
       await regenerateApiKey(client.clientId, newKey)
       setNewKeyPreview(newKey)
+      setShowFullKey(true)
       toast.success('API key regenerated — old key is now invalid')
     } catch (err) {
       toast.error(err?.response?.data?.error || 'Failed to regenerate key')
@@ -316,6 +350,12 @@ export default function ClientDetailPage() {
   }[sourceType] || sourceType
 
   const savedLinkIsWindowsPath = client.folderLink && isWindowsPath(client.folderLink)
+
+  // The key to display: prefer newKeyPreview (just regenerated), else stored key
+  const activeKey = newKeyPreview || client.apiKey || null
+  const maskedKey = activeKey
+    ? `${activeKey.slice(0, 16)}${'•'.repeat(12)}`
+    : null
 
   return (
     <div className="animate-in">
@@ -529,7 +569,7 @@ export default function ClientDetailPage() {
             )}
           </div>
 
-          {/* API Key Management */}
+          {/* API Key Management — FIXED: shows persistent key, supports reveal/hide */}
           <div className="card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -537,6 +577,11 @@ export default function ClientDetailPage() {
                 <span style={{ fontFamily: "'Syne', sans-serif", fontWeight: 700, fontSize: 14, color: '#e8e8f0' }}>
                   API Key
                 </span>
+                {client.apiKeyRotatedAt && (
+                  <span style={{ fontSize: 10, color: '#555570', fontFamily: "'Space Mono', monospace" }}>
+                    rotated {formatDistanceToNow(new Date(client.apiKeyRotatedAt), { addSuffix: true })}
+                  </span>
+                )}
               </div>
               <button
                 className="btn btn-sm"
@@ -557,54 +602,66 @@ export default function ClientDetailPage() {
               </button>
             </div>
 
-            {newKeyPreview ? (
-              <div>
-                <div style={{
-                  display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 8, marginBottom: 10,
-                  background: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.25)',
-                }}>
-                  <ShieldAlert size={14} color="#f59e0b" style={{ flexShrink: 0, marginTop: 1 }} />
-                  <div style={{ fontSize: 12, color: '#9a7030', lineHeight: 1.65 }}>
-                    <strong style={{ color: '#f59e0b' }}>New key generated.</strong> The previous key is now expired.
-                    Share this new key with the client immediately.
-                  </div>
+            {/* New key banner shown right after regeneration */}
+            {newKeyPreview && (
+              <div style={{
+                display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 8, marginBottom: 12,
+                background: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.25)',
+              }}>
+                <ShieldAlert size={14} color="#f59e0b" style={{ flexShrink: 0, marginTop: 1 }} />
+                <div style={{ fontSize: 12, color: '#9a7030', lineHeight: 1.65 }}>
+                  <strong style={{ color: '#f59e0b' }}>New key generated.</strong> The previous key is now expired.
+                  Share this new key with the client immediately.
                 </div>
-                <div style={{
-                  padding: '10px 12px', background: '#12121a',
-                  border: '1px solid rgba(34,211,160,0.3)', borderRadius: 8,
-                  fontFamily: "'Space Mono', monospace", fontSize: 11,
-                  color: '#22d3a0', wordBreak: 'break-all', lineHeight: 1.6,
-                  marginBottom: 10,
-                }}>
-                  {newKeyPreview}
-                </div>
-                <button
-                  className="btn btn-sm btn-primary"
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}
-                  onClick={() => copyKey(newKeyPreview)}
-                >
-                  <Copy size={12} /> Copy New Key
-                </button>
-              </div>
-            ) : (
-              <div>
-                <div style={{
-                  padding: '10px 12px', background: '#12121a',
-                  border: '1px solid #2a2a3d', borderRadius: 8,
-                  fontFamily: "'Space Mono', monospace", fontSize: 12,
-                  color: '#555570',
-                }}>
-                  {client.apiKey
-                    ? `${client.apiKey.slice(0, 12)}${'•'.repeat(16)}`
-                    : <span style={{ color: '#333348' }}>No API key on record</span>
-                  }
-                </div>
-                <p style={{ fontSize: 11, color: '#555570', marginTop: 6 }}>
-                  Click <strong style={{ color: '#e8e8f0' }}>Regenerate Key</strong> to invalidate the current key and issue a new one.
-                  The client must update their key immediately after regeneration.
-                </p>
               </div>
             )}
+
+            {/* Active key display */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: '#555570', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Active Key
+              </div>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 12px', background: '#12121a',
+                border: `1px solid ${newKeyPreview ? 'rgba(34,211,160,0.3)' : '#2a2a3d'}`,
+                borderRadius: 8,
+              }}>
+                <div style={{
+                  flex: 1,
+                  fontFamily: "'Space Mono', monospace", fontSize: 11,
+                  color: activeKey ? (newKeyPreview ? '#22d3a0' : '#8888aa') : '#333348',
+                  wordBreak: 'break-all', lineHeight: 1.6,
+                }}>
+                  {activeKey
+                    ? (showFullKey ? activeKey : maskedKey)
+                    : 'No key on record — regenerate to create one'}
+                </div>
+                {activeKey && (
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button
+                      className="btn-icon"
+                      onClick={() => setShowFullKey(v => !v)}
+                      title={showFullKey ? 'Hide key' : 'Reveal full key'}
+                    >
+                      {showFullKey ? <EyeOff size={13} color="#555570" /> : <Eye size={13} color="#555570" />}
+                    </button>
+                    <button
+                      className="btn-icon"
+                      onClick={() => copyKey(activeKey)}
+                      title="Copy key"
+                    >
+                      <Copy size={13} color="#6c63ff" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <p style={{ fontSize: 11, color: '#555570', marginTop: 4 }}>
+              Click <strong style={{ color: '#e8e8f0' }}>Regenerate Key</strong> to invalidate the current key and issue a new one.
+              The client must update their key immediately after regeneration.
+            </p>
           </div>
 
           {/* Stats */}
@@ -646,3 +703,4 @@ export default function ClientDetailPage() {
     </div>
   )
 }
+
